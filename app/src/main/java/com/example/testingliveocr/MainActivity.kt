@@ -1,7 +1,11 @@
 package com.example.testingliveocr
 
 import android.Manifest
+import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.pdf.PdfDocument
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -21,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -36,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.testingliveocr.ui.theme.TestingLiveOCRTheme
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
@@ -49,6 +55,8 @@ import com.google.mlkit.nl.translate.TranslatorOptions
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
@@ -118,6 +126,7 @@ fun MainScreen() {
     var isPaused by remember { mutableStateOf(false) }
     var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var lastPreviewView by remember { mutableStateOf<PreviewView?>(null) }
+    val context = LocalContext.current
 
     val translator = remember(sourceLanguage, targetLanguage) {
         val options = TranslatorOptions.Builder()
@@ -166,21 +175,36 @@ fun MainScreen() {
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = {
-                    if (!isPaused) {
-                        capturedBitmap = lastPreviewView?.bitmap
-                    } else {
-                        capturedBitmap = null
-                    }
-                    isPaused = !isPaused
-                },
-                containerColor = if (isPaused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
-            ) {
-                Icon(
-                    if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                    contentDescription = if (isPaused) "Resume" else "Pause"
-                )
+            Column(horizontalAlignment = Alignment.End) {
+                FloatingActionButton(
+                    onClick = {
+                        val bitmapToSave = capturedBitmap ?: lastPreviewView?.bitmap
+                        if (bitmapToSave != null) {
+                            generateAndOpenPDF(context, bitmapToSave, translatedText)
+                        }
+                    },
+                    containerColor = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                ) {
+                    Icon(Icons.Default.PictureAsPdf, contentDescription = "Save as PDF")
+                }
+                
+                FloatingActionButton(
+                    onClick = {
+                        if (!isPaused) {
+                            capturedBitmap = lastPreviewView?.bitmap
+                        } else {
+                            capturedBitmap = null
+                        }
+                        isPaused = !isPaused
+                    },
+                    containerColor = if (isPaused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                ) {
+                    Icon(
+                        if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                        contentDescription = if (isPaused) "Resume" else "Pause"
+                    )
+                }
             }
         }
     ) { padding ->
@@ -393,6 +417,85 @@ private fun processImageProxy(
     } else {
         imageProxy.close()
     }
+}
+
+private fun generateAndOpenPDF(context: android.content.Context, bitmap: Bitmap, text: String) {
+    val pdfDocument = PdfDocument()
+    // Create page with some extra space at bottom for text
+    val pageInfo = PdfDocument.PageInfo.Builder(bitmap.width, bitmap.height + 400, 1).create()
+    val page = pdfDocument.startPage(pageInfo)
+    val canvas = page.canvas
+
+    // Draw the image
+    canvas.drawBitmap(bitmap, 0f, 0f, null)
+
+    // Draw the translated text
+    val paint = android.graphics.Paint().apply {
+        color = android.graphics.Color.BLACK
+        textSize = 40f
+        isAntiAlias = true
+    }
+    
+    val textY = bitmap.height.toFloat() + 80f
+    val margin = 50f
+    val maxWidth = bitmap.width.toFloat() - (2 * margin)
+    
+    val lines = wrapText(text, paint, maxWidth)
+    var currentY = textY
+    for (line in lines) {
+        if (currentY + 50f > pageInfo.pageHeight) break // Basic overflow protection
+        canvas.drawText(line, margin, currentY, paint)
+        currentY += paint.descent() - paint.ascent() + 10f
+    }
+
+    pdfDocument.finishPage(page)
+
+    val file = File(context.cacheDir, "ByteLingo_Scan_${System.currentTimeMillis()}.pdf")
+    try {
+        pdfDocument.writeTo(FileOutputStream(file))
+        openPDF(context, file)
+    } catch (e: Exception) {
+        Log.e("ByteLingo", "Error writing PDF", e)
+    } finally {
+        pdfDocument.close()
+    }
+}
+
+private fun wrapText(text: String, paint: android.graphics.Paint, maxWidth: Float): List<String> {
+    val words = text.split(Regex("\\s+"))
+    val lines = mutableListOf<String>()
+    var currentLine = StringBuilder()
+
+    for (word in words) {
+        val testLine = if (currentLine.isEmpty()) word else "$currentLine $word"
+        val width = paint.measureText(testLine)
+        if (width <= maxWidth) {
+            currentLine.append(if (currentLine.isEmpty()) word else " $word")
+        } else {
+            if (currentLine.isNotEmpty()) {
+                lines.add(currentLine.toString())
+            }
+            currentLine = StringBuilder(word)
+        }
+    }
+    if (currentLine.isNotEmpty()) {
+        lines.add(currentLine.toString())
+    }
+    return lines
+}
+
+private fun openPDF(context: android.content.Context, file: File) {
+    val uri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file
+    )
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, "application/pdf")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(Intent.createChooser(intent, "Open PDF with..."))
 }
 
 @Composable
