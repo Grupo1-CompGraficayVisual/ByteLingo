@@ -69,7 +69,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    ByteLingoApp()
+                    ByteLingoApp() /* Lanzar la aplicacion directamente */
                 }
             }
         }
@@ -78,7 +78,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
-fun ByteLingoApp() {
+fun ByteLingoApp() { /* Revisar si hay permiso de camara, y si no, pedirlos */
     val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
 
     if (cameraPermissionState.status.isGranted) {
