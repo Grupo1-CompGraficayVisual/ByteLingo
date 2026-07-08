@@ -623,14 +623,8 @@ fun CameraView(
 // Esta función arma un PDF con la captura de pantalla y el texto traducido
 private fun generateAndOpenPDF(context: android.content.Context, bitmap: Bitmap, text: String) {
     val pdfDocument = PdfDocument()
-    // Le damos un poco más de espacio abajo para que quepa el texto
-    val pageInfo = PdfDocument.PageInfo.Builder(bitmap.width, bitmap.height + 400, 1).create()
-    val page = pdfDocument.startPage(pageInfo)
-    val canvas = page.canvas
-
-    // Dibujamos la imagen capturada
-    canvas.drawBitmap(bitmap, 0f, 0f, null)
-
+    val margin = 50f
+    
     // Configuramos cómo se va a ver el texto en el PDF
     val paint = android.graphics.Paint().apply {
         color = android.graphics.Color.BLACK
@@ -638,20 +632,40 @@ private fun generateAndOpenPDF(context: android.content.Context, bitmap: Bitmap,
         isAntiAlias = true
     }
     
-    val textY = bitmap.height.toFloat() + 80f
-    val margin = 50f
     val maxWidth = bitmap.width.toFloat() - (2 * margin)
-    
-    // Dividimos el texto en renglones para que no se salga de la hoja
     val lines = wrapText(text, paint, maxWidth)
-    var currentY = textY
+    val lineHeight = paint.descent() - paint.ascent() + 10f
+    
+    // Dimensiones de la página basadas en la imagen + espacio extra
+    val pageWidth = bitmap.width
+    val pageHeight = bitmap.height + 400
+    
+    var pageNumber = 1
+    var pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create()
+    var currentPage = pdfDocument.startPage(pageInfo)
+    var canvas = currentPage.canvas
+
+    // Dibujamos la imagen capturada en la primera página
+    canvas.drawBitmap(bitmap, 0f, 0f, null)
+
+    var currentY = bitmap.height.toFloat() + 80f
+
     for (line in lines) {
-        if (currentY + 50f > pageInfo.pageHeight) break // Por si se nos acaba la hoja
+        // Si el texto se sale del alto de la página actual, cerramos esta y abrimos otra
+        if (currentY + lineHeight > pageHeight - margin) {
+            pdfDocument.finishPage(currentPage)
+            pageNumber++
+            pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create()
+            currentPage = pdfDocument.startPage(pageInfo)
+            canvas = currentPage.canvas
+            currentY = margin + 20f // Margen superior para páginas nuevas
+        }
+        
         canvas.drawText(line, margin, currentY, paint)
-        currentY += paint.descent() - paint.ascent() + 10f
+        currentY += lineHeight
     }
 
-    pdfDocument.finishPage(page)
+    pdfDocument.finishPage(currentPage)
 
     // Guardamos el archivo en la cache temporal
     val file = File(context.cacheDir, "ByteLingo_Scan_${System.currentTimeMillis()}.pdf")
