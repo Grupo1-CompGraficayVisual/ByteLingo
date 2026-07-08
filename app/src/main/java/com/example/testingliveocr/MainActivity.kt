@@ -9,8 +9,10 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -23,10 +25,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PictureAsPdf
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,7 +34,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -131,6 +129,49 @@ fun MainScreen() {
     var lastPreviewView by remember { mutableStateOf<PreviewView?>(null) }
     val context = LocalContext.current
 
+    // ML Kit Recognizer
+    val recognizer = remember { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
+
+    // Launcher para elegir imagen de la galería
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            try {
+                val image = InputImage.fromFilePath(context, it)
+                val bitmap = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                    android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(context.contentResolver, it))
+                } else {
+                    android.provider.MediaStore.Images.Media.getBitmap(context.contentResolver, it)
+                }
+                capturedBitmap = bitmap
+                isPaused = true
+                
+                recognizer.process(image)
+                    .addOnSuccessListener { visionText ->
+                        detectedText = visionText.text
+                    }
+                    .addOnFailureListener { e ->
+                        Log.e("ByteLingo", "Error en OCR de galería", e)
+                    }
+            } catch (e: Exception) {
+                Log.e("ByteLingo", "Error al cargar imagen de galería", e)
+            }
+        }
+    }
+
+    // Función para procesar captura de cámara
+    val processCapturedBitmap = { bitmap: Bitmap ->
+        val image = InputImage.fromBitmap(bitmap, 0)
+        recognizer.process(image)
+            .addOnSuccessListener { visionText ->
+                detectedText = visionText.text
+            }
+            .addOnFailureListener { e ->
+                Log.e("ByteLingo", "Error en OCR de cámara", e)
+            }
+    }
+
     // Configuramos el traductor dependiendo de los idiomas que elijas
     val translator = remember(sourceLanguage, targetLanguage) {
         val options = TranslatorOptions.Builder()
@@ -194,21 +235,37 @@ fun MainScreen() {
                     Icon(Icons.Default.PictureAsPdf, contentDescription = "Guardar como PDF")
                 }
                 
-                // Botón para pausar o resumir el escaneo
+                // Botón para Galería
+                FloatingActionButton(
+                    onClick = { galleryLauncher.launch("image/*") },
+                    containerColor = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                ) {
+                    Icon(Icons.Default.PhotoLibrary, contentDescription = "Galería")
+                }
+
+                // Botón para Capturar / Nueva Foto
                 FloatingActionButton(
                     onClick = {
                         if (!isPaused) {
-                            capturedBitmap = lastPreviewView?.bitmap
+                            val bitmap = lastPreviewView?.bitmap
+                            if (bitmap != null) {
+                                capturedBitmap = bitmap
+                                isPaused = true
+                                processCapturedBitmap(bitmap)
+                            }
                         } else {
                             capturedBitmap = null
+                            isPaused = false
+                            detectedText = ""
+                            translatedText = ""
                         }
-                        isPaused = !isPaused
                     },
                     containerColor = if (isPaused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
                 ) {
                     Icon(
-                        if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                        contentDescription = if (isPaused) "Resumir" else "Pausar"
+                        if (isPaused) Icons.Default.Refresh else Icons.Default.CameraAlt,
+                        contentDescription = if (isPaused) "Nueva Foto" else "Capturar"
                     )
                 }
             }
@@ -219,37 +276,26 @@ fun MainScreen() {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Parte de arriba: La cámara en vivo
+            // Parte de arriba: La cámara o la imagen capturada
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
             ) {
-                CameraView(
-                    onTextDetected = { text ->
-                        if (!isPaused) {
-                            detectedText = text
-                        }
-                    },
-                    onPreviewViewReady = { lastPreviewView = it }
-                )
+                if (!isPaused) {
+                    CameraView(
+                        onPreviewViewReady = { lastPreviewView = it }
+                    )
+                }
 
-                // Si está pausado, mostramos una foto fija en vez del video
+                // Si está pausado, mostramos la foto capturada o de galería
                 if (isPaused && capturedBitmap != null) {
                     Image(
                         bitmap = capturedBitmap!!.asImageBitmap(),
-                        contentDescription = "Cuadro pausado",
+                        contentDescription = "Imagen capturada",
                         modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
+                        contentScale = ContentScale.Fit
                     )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color.Black.copy(alpha = 0.3f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("PAUSADO", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 24.sp)
-                    }
                 }
             }
 
@@ -350,14 +396,11 @@ fun LanguageSelector(
 
 @Composable
 fun CameraView(
-    onTextDetected: (String) -> Unit,
     onPreviewViewReady: (PreviewView) -> Unit
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
-    val executor = remember { Executors.newSingleThreadExecutor() }
-    val recognizer = remember { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
     // Integramos la vista de la cámara de Android en Compose
     AndroidView(
@@ -372,16 +415,6 @@ fun CameraView(
                     it.surfaceProvider = previewView.surfaceProvider
                 }
 
-                // Configuramos el análisis de imagen para el OCR
-                val imageAnalysis = ImageAnalysis.Builder()
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .build()
-                    .also {
-                        it.setAnalyzer(executor) { imageProxy ->
-                            processImageProxy(recognizer, imageProxy, onTextDetected)
-                        }
-                    }
-
                 val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
                 try {
@@ -389,8 +422,7 @@ fun CameraView(
                     cameraProvider.bindToLifecycle(
                         lifecycleOwner,
                         cameraSelector,
-                        preview,
-                        imageAnalysis
+                        preview
                     )
                 } catch (exc: Exception) {
                     Log.e("ByteLingo", "No se pudo conectar la cámara", exc)
@@ -400,36 +432,6 @@ fun CameraView(
         },
         modifier = Modifier.fillMaxSize()
     )
-}
-
-@androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
-private fun processImageProxy(
-    recognizer: com.google.mlkit.vision.text.TextRecognizer,
-    imageProxy: ImageProxy,
-    onTextDetected: (String) -> Unit
-) {
-    val mediaImage = imageProxy.image
-    if (mediaImage != null) {
-        val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-        // ML Kit se encarga de buscar texto en la imagen
-        recognizer.process(image)
-            .addOnSuccessListener { visionText ->
-                // Solo nos importa si detectó algo de texto
-                val resultText = visionText.text
-                if (resultText.isNotBlank()) {
-                    onTextDetected(resultText)
-                }
-            }
-            .addOnFailureListener { e ->
-                Log.e("ByteLingo", "No se pudo reconocer el texto", e)
-            }
-            .addOnCompleteListener {
-                // Hay que cerrar el imageProxy para que siga fluyendo el video
-                imageProxy.close()
-            }
-    } else {
-        imageProxy.close()
-    }
 }
 
 // Esta función arma un PDF con la captura de pantalla y el texto traducido
