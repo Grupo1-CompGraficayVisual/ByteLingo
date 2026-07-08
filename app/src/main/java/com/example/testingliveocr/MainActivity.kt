@@ -69,7 +69,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    ByteLingoApp() /* Lanzar la aplicacion directamente */
+                    ByteLingoApp() // Arrancamos la app directo
                 }
             }
         }
@@ -78,21 +78,22 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
-fun ByteLingoApp() { /* Revisar si hay permiso de camara, y si no, pedirlos */
+fun ByteLingoApp() { // Aquí revisamos si tenemos permiso de usar la cámara
     val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
 
     if (cameraPermissionState.status.isGranted) {
-        MainScreen()
+        MainScreen() // Si hay permiso, vamos a la pantalla principal
     } else {
+        // Si no hay permiso, le pedimos al usuario que nos lo dé
         Column(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("Camera permission is required for OCR")
+            Text("Ocupamos permiso de la cámara para que el OCR jale")
             Spacer(modifier = Modifier.height(16.dp))
             Button(onClick = { cameraPermissionState.launchPermissionRequest() }) {
-                Text("Request Permission")
+                Text("Dar permiso")
             }
         }
     }
@@ -100,27 +101,29 @@ fun ByteLingoApp() { /* Revisar si hay permiso de camara, y si no, pedirlos */
 
 data class Language(val code: String, val name: String)
 
+// Esta es la lista de idiomas que aguanta la app usando ML Kit
 val supportedLanguages = listOf(
-    Language(TranslateLanguage.ENGLISH, "English"),
-    Language(TranslateLanguage.SPANISH, "Spanish"),
-    Language(TranslateLanguage.FRENCH, "French"),
-    Language(TranslateLanguage.GERMAN, "German"),
-    Language(TranslateLanguage.ITALIAN, "Italian"),
-    Language(TranslateLanguage.PORTUGUESE, "Portuguese"),
-    Language(TranslateLanguage.RUSSIAN, "Russian"),
-    Language(TranslateLanguage.JAPANESE, "Japanese"),
-    Language(TranslateLanguage.CHINESE, "Chinese"),
-    Language(TranslateLanguage.ARABIC, "Arabic"),
+    Language(TranslateLanguage.ENGLISH, "Inglés"),
+    Language(TranslateLanguage.SPANISH, "Español"),
+    Language(TranslateLanguage.FRENCH, "Francés"),
+    Language(TranslateLanguage.GERMAN, "Alemán"),
+    Language(TranslateLanguage.ITALIAN, "Italiano"),
+    Language(TranslateLanguage.PORTUGUESE, "Portugués"),
+    Language(TranslateLanguage.RUSSIAN, "Ruso"),
+    Language(TranslateLanguage.JAPANESE, "Japonés"),
+    Language(TranslateLanguage.CHINESE, "Chino"),
+    Language(TranslateLanguage.ARABIC, "Árabe"),
     Language(TranslateLanguage.HINDI, "Hindi")
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen() {
+    // Variables para guardar el texto detectado, el traducido y los idiomas seleccionados
     var detectedText by remember { mutableStateOf("") }
     var translatedText by remember { mutableStateOf("") }
-    var sourceLanguage by remember { mutableStateOf(supportedLanguages[0]) } // English
-    var targetLanguage by remember { mutableStateOf(supportedLanguages[1]) } // Spanish
+    var sourceLanguage by remember { mutableStateOf(supportedLanguages[0]) } 
+    var targetLanguage by remember { mutableStateOf(supportedLanguages[1]) } 
     var isTranslating by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
     var isPaused by remember { mutableStateOf(false) }
@@ -128,6 +131,7 @@ fun MainScreen() {
     var lastPreviewView by remember { mutableStateOf<PreviewView?>(null) }
     val context = LocalContext.current
 
+    // Configuramos el traductor dependiendo de los idiomas que elijas
     val translator = remember(sourceLanguage, targetLanguage) {
         val options = TranslatorOptions.Builder()
             .setSourceLanguage(sourceLanguage.code)
@@ -136,14 +140,14 @@ fun MainScreen() {
         Translation.getClient(options)
     }
 
-    // Handle translator lifecycle
+    // Limpiamos el traductor cuando ya no lo ocupemos
     DisposableEffect(translator) {
         onDispose {
             translator.close()
         }
     }
 
-    // Download models if needed
+    // Aquí bajamos los modelos de traducción si no los tienes en el cel
     LaunchedEffect(translator) {
         isTranslating = false
         val conditions = DownloadConditions.Builder().build()
@@ -152,12 +156,12 @@ fun MainScreen() {
             .addOnFailureListener { isTranslating = false }
     }
 
-    // Translate detected text when it changes
+    // Cada que cambie el texto detectado, lo mandamos a traducir
     LaunchedEffect(detectedText, isTranslating) {
         if (isTranslating && detectedText.isNotBlank()) {
             translator.translate(detectedText)
                 .addOnSuccessListener { translatedText = it }
-                .addOnFailureListener { Log.e("ByteLingo", "Translation failed", it) }
+                .addOnFailureListener { Log.e("ByteLingo", "Falló la traducción", it) }
         } else if (detectedText.isBlank()) {
             translatedText = ""
         }
@@ -169,13 +173,14 @@ fun MainScreen() {
                 title = { Text("ByteLingo", fontWeight = FontWeight.Bold) },
                 actions = {
                     IconButton(onClick = { showAboutDialog = true }) {
-                        Icon(Icons.Default.Info, contentDescription = "About")
+                        Icon(Icons.Default.Info, contentDescription = "Acerca de")
                     }
                 }
             )
         },
         floatingActionButton = {
             Column(horizontalAlignment = Alignment.End) {
+                // Botón para generar el PDF con lo que está en pantalla
                 FloatingActionButton(
                     onClick = {
                         val bitmapToSave = capturedBitmap ?: lastPreviewView?.bitmap
@@ -186,9 +191,10 @@ fun MainScreen() {
                     containerColor = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.padding(bottom = 16.dp)
                 ) {
-                    Icon(Icons.Default.PictureAsPdf, contentDescription = "Save as PDF")
+                    Icon(Icons.Default.PictureAsPdf, contentDescription = "Guardar como PDF")
                 }
                 
+                // Botón para pausar o resumir el escaneo
                 FloatingActionButton(
                     onClick = {
                         if (!isPaused) {
@@ -202,7 +208,7 @@ fun MainScreen() {
                 ) {
                     Icon(
                         if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                        contentDescription = if (isPaused) "Resume" else "Pause"
+                        contentDescription = if (isPaused) "Resumir" else "Pausar"
                     )
                 }
             }
@@ -213,7 +219,7 @@ fun MainScreen() {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Camera View (Top half)
+            // Parte de arriba: La cámara en vivo
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -228,10 +234,11 @@ fun MainScreen() {
                     onPreviewViewReady = { lastPreviewView = it }
                 )
 
+                // Si está pausado, mostramos una foto fija en vez del video
                 if (isPaused && capturedBitmap != null) {
                     Image(
                         bitmap = capturedBitmap!!.asImageBitmap(),
-                        contentDescription = "Frozen frame",
+                        contentDescription = "Cuadro pausado",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
@@ -241,12 +248,12 @@ fun MainScreen() {
                             .background(Color.Black.copy(alpha = 0.3f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("PAUSED", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 24.sp)
+                        Text("PAUSADO", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 24.sp)
                     }
                 }
             }
 
-            // Language Selection and Results (Bottom half)
+            // Parte de abajo: Selección de idiomas y resultados
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -259,13 +266,13 @@ fun MainScreen() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     LanguageSelector(
-                        label = "From",
+                        label = "De",
                         selectedLanguage = sourceLanguage,
                         onLanguageSelected = { sourceLanguage = it }
                     )
                     Text("→", fontSize = 24.sp)
                     LanguageSelector(
-                        label = "To",
+                        label = "A",
                         selectedLanguage = targetLanguage,
                         onLanguageSelected = { targetLanguage = it }
                     )
@@ -273,7 +280,7 @@ fun MainScreen() {
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Text("Detected Text:", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                Text("Texto Detectado:", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -287,7 +294,7 @@ fun MainScreen() {
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Text("Translated Text:", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
+                Text("Texto Traducido:", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -297,7 +304,7 @@ fun MainScreen() {
                         .verticalScroll(rememberScrollState())
                 ) {
                     if (!isTranslating && detectedText.isNotBlank()) {
-                        Text("Downloading translation models...", color = Color.Gray)
+                        Text("Bajando modelos de traducción...", color = Color.Gray)
                     } else {
                         Text(text = translatedText)
                     }
@@ -319,6 +326,7 @@ fun LanguageSelector(
 ) {
     var expanded by remember { mutableStateOf(false) }
 
+    // Un simple menú desplegable para elegir el idioma
     Box {
         OutlinedButton(onClick = { expanded = true }) {
             Text("$label: ${selectedLanguage.name}")
@@ -351,6 +359,7 @@ fun CameraView(
     val executor = remember { Executors.newSingleThreadExecutor() }
     val recognizer = remember { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
+    // Integramos la vista de la cámara de Android en Compose
     AndroidView(
         factory = { ctx ->
             val previewView = PreviewView(ctx).also {
@@ -358,10 +367,12 @@ fun CameraView(
             }
             cameraProviderFuture.addListener({
                 val cameraProvider = cameraProviderFuture.get()
+                // Configuramos la previsualización
                 val preview = Preview.Builder().build().also {
                     it.surfaceProvider = previewView.surfaceProvider
                 }
 
+                // Configuramos el análisis de imagen para el OCR
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
@@ -382,7 +393,7 @@ fun CameraView(
                         imageAnalysis
                     )
                 } catch (exc: Exception) {
-                    Log.e("ByteLingo", "Use case binding failed", exc)
+                    Log.e("ByteLingo", "No se pudo conectar la cámara", exc)
                 }
             }, ContextCompat.getMainExecutor(ctx))
             previewView
@@ -400,18 +411,20 @@ private fun processImageProxy(
     val mediaImage = imageProxy.image
     if (mediaImage != null) {
         val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+        // ML Kit se encarga de buscar texto en la imagen
         recognizer.process(image)
             .addOnSuccessListener { visionText ->
-                // Filter out small or empty text to reduce flickering
+                // Solo nos importa si detectó algo de texto
                 val resultText = visionText.text
                 if (resultText.isNotBlank()) {
                     onTextDetected(resultText)
                 }
             }
             .addOnFailureListener { e ->
-                Log.e("ByteLingo", "Text recognition failed", e)
+                Log.e("ByteLingo", "No se pudo reconocer el texto", e)
             }
             .addOnCompleteListener {
+                // Hay que cerrar el imageProxy para que siga fluyendo el video
                 imageProxy.close()
             }
     } else {
@@ -419,20 +432,21 @@ private fun processImageProxy(
     }
 }
 
+// Esta función arma un PDF con la captura de pantalla y el texto traducido
 private fun generateAndOpenPDF(context: android.content.Context, bitmap: Bitmap, text: String) {
     val pdfDocument = PdfDocument()
-    // Create page with some extra space at bottom for text
+    // Le damos un poco más de espacio abajo para que quepa el texto
     val pageInfo = PdfDocument.PageInfo.Builder(bitmap.width, bitmap.height + 400, 1).create()
     val page = pdfDocument.startPage(pageInfo)
     val canvas = page.canvas
 
-    // Draw the image
+    // Dibujamos la imagen capturada
     canvas.drawBitmap(bitmap, 0f, 0f, null)
 
-    // Draw the translated text
+    // Configuramos cómo se va a ver el texto en el PDF
     val paint = android.graphics.Paint().apply {
         color = android.graphics.Color.BLACK
-        textSize = 40f
+        textSize = 20f
         isAntiAlias = true
     }
     
@@ -440,27 +454,30 @@ private fun generateAndOpenPDF(context: android.content.Context, bitmap: Bitmap,
     val margin = 50f
     val maxWidth = bitmap.width.toFloat() - (2 * margin)
     
+    // Dividimos el texto en renglones para que no se salga de la hoja
     val lines = wrapText(text, paint, maxWidth)
     var currentY = textY
     for (line in lines) {
-        if (currentY + 50f > pageInfo.pageHeight) break // Basic overflow protection
+        if (currentY + 50f > pageInfo.pageHeight) break // Por si se nos acaba la hoja
         canvas.drawText(line, margin, currentY, paint)
         currentY += paint.descent() - paint.ascent() + 10f
     }
 
     pdfDocument.finishPage(page)
 
+    // Guardamos el archivo en la cache temporal
     val file = File(context.cacheDir, "ByteLingo_Scan_${System.currentTimeMillis()}.pdf")
     try {
         pdfDocument.writeTo(FileOutputStream(file))
-        openPDF(context, file)
+        openPDF(context, file) // Intentamos abrirlo de una vez
     } catch (e: Exception) {
-        Log.e("ByteLingo", "Error writing PDF", e)
+        Log.e("ByteLingo", "Error al escribir el PDF", e)
     } finally {
         pdfDocument.close()
     }
 }
 
+// Ayuda a separar el texto en varias líneas si está muy largo
 private fun wrapText(text: String, paint: android.graphics.Paint, maxWidth: Float): List<String> {
     val words = text.split(Regex("\\s+"))
     val lines = mutableListOf<String>()
@@ -484,6 +501,7 @@ private fun wrapText(text: String, paint: android.graphics.Paint, maxWidth: Floa
     return lines
 }
 
+// Lanza un intent para que el usuario elija con qué app abrir su PDF
 private fun openPDF(context: android.content.Context, file: File) {
     val uri = FileProvider.getUriForFile(
         context,
@@ -495,19 +513,19 @@ private fun openPDF(context: android.content.Context, file: File) {
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
-    context.startActivity(Intent.createChooser(intent, "Open PDF with..."))
+    context.startActivity(Intent.createChooser(intent, "Abrir PDF con..."))
 }
 
 @Composable
 fun AboutDialog(onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("About ByteLingo") },
+        title = { Text("Acerca de ByteLingo") },
         text = {
             Column {
-                Text("ByteLingo is a live OCR translator app.")
+                Text("ByteLingo es una app para traducir texto en vivo usando OCR.")
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("Developers:", fontWeight = FontWeight.Bold)
+                Text("Desarrolladores:", fontWeight = FontWeight.Bold)
                 Text("• Jose Meraz")
                 Text("• Carlos Lopez")
                 Text("• Gilberto Valladares")
@@ -519,7 +537,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("OK")
+                Text("Cerrar")
             }
         }
     )
