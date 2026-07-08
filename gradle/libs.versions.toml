@@ -12,6 +12,10 @@ camerax = "1.4.1"
 mlkitText = "16.0.1"
 mlkitTranslate = "17.0.3"
 accompanistPermissions = "0.34.0"
+appcompat = "1.7.0"
+constraintlayout = "2.2.0"
+material = "1.12.0"
+coordinatorlayout = "1.2.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -35,6 +39,10 @@ androidx-camera-view = { group = "androidx.camera", name = "camera-view", versio
 mlkit-text-recognition = { group = "com.google.mlkit", name = "text-recognition", version.ref = "mlkitText" }
 mlkit-translate = { group = "com.google.mlkit", name = "translate", version.ref = "mlkitTranslate" }
 accompanist-permissions = { group = "com.google.accompanist", name = "accompanist-permissions", version.ref = "accompanistPermissions" }
+androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+androidx-constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
+google-material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+androidx-coordinatorlayout = { group = "androidx.coordinatorlayout", name = "coordinatorlayout", version.ref = "coordinatorlayout" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
