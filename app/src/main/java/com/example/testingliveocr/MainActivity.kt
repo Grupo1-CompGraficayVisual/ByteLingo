@@ -3,7 +3,6 @@ package com.example.testingliveocr
 import android.Manifest
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.os.Bundle
@@ -19,8 +18,10 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -30,13 +31,23 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -125,6 +136,7 @@ fun MainScreen() {
     var isTranslating by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
     var isPaused by remember { mutableStateOf(false) }
+    var isCropping by remember { mutableStateOf(false) }
     var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var lastPreviewView by remember { mutableStateOf<PreviewView?>(null) }
     val context = LocalContext.current
@@ -132,35 +144,7 @@ fun MainScreen() {
     // ML Kit Recognizer
     val recognizer = remember { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
-    // Launcher para elegir imagen de la galería
-    val galleryLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri?.let {
-            try {
-                val image = InputImage.fromFilePath(context, it)
-                val bitmap = if (android.os.Build.VERSION.SDK_INT >= 28) {
-                    android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(context.contentResolver, it))
-                } else {
-                    android.provider.MediaStore.Images.Media.getBitmap(context.contentResolver, it)
-                }
-                capturedBitmap = bitmap
-                isPaused = true
-                
-                recognizer.process(image)
-                    .addOnSuccessListener { visionText ->
-                        detectedText = visionText.text
-                    }
-                    .addOnFailureListener { e ->
-                        Log.e("ByteLingo", "Error en OCR de galería", e)
-                    }
-            } catch (e: Exception) {
-                Log.e("ByteLingo", "Error al cargar imagen de galería", e)
-            }
-        }
-    }
-
-    // Función para procesar captura de cámara
+    // Función para procesar captura de cámara o imagen recortada
     val processCapturedBitmap = { bitmap: Bitmap ->
         val image = InputImage.fromBitmap(bitmap, 0)
         recognizer.process(image)
@@ -168,8 +152,31 @@ fun MainScreen() {
                 detectedText = visionText.text
             }
             .addOnFailureListener { e ->
-                Log.e("ByteLingo", "Error en OCR de cámara", e)
+                Log.e("ByteLingo", "Error en OCR", e)
             }
+    }
+
+    // Launcher para elegir imagen de la galería
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            try {
+                val bitmap = android.graphics.ImageDecoder.decodeBitmap(
+                    android.graphics.ImageDecoder.createSource(context.contentResolver, it)
+                ) { decoder, _, _ ->
+                    decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+                    decoder.isMutableRequired = true
+                }
+                capturedBitmap = bitmap
+                isPaused = true
+                isCropping = false
+                
+                processCapturedBitmap(bitmap)
+            } catch (e: Exception) {
+                Log.e("ByteLingo", "Error al cargar imagen de galería", e)
+            }
+        }
     }
 
     // Configuramos el traductor dependiendo de los idiomas que elijas
@@ -221,33 +228,51 @@ fun MainScreen() {
         },
         floatingActionButton = {
             Column(horizontalAlignment = Alignment.End) {
-                // Botón para generar el PDF con lo que está en pantalla
-                FloatingActionButton(
-                    onClick = {
-                        val bitmapToSave = capturedBitmap ?: lastPreviewView?.bitmap
-                        if (bitmapToSave != null) {
-                            generateAndOpenPDF(context, bitmapToSave, translatedText)
-                        }
-                    },
-                    containerColor = MaterialTheme.colorScheme.tertiary,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                ) {
-                    Icon(Icons.Default.PictureAsPdf, contentDescription = "Guardar como PDF")
+                // Botón para generar el PDF
+                if (!isCropping) {
+                    FloatingActionButton(
+                        onClick = {
+                            val bitmapToSave = capturedBitmap ?: lastPreviewView?.bitmap
+                            if (bitmapToSave != null) {
+                                generateAndOpenPDF(context, bitmapToSave, translatedText)
+                            }
+                        },
+                        containerColor = MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    ) {
+                        Icon(Icons.Default.PictureAsPdf, contentDescription = "Guardar como PDF")
+                    }
                 }
                 
                 // Botón para Galería
-                FloatingActionButton(
-                    onClick = { galleryLauncher.launch("image/*") },
-                    containerColor = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                ) {
-                    Icon(Icons.Default.PhotoLibrary, contentDescription = "Galería")
+                if (!isPaused && !isCropping) {
+                    FloatingActionButton(
+                        onClick = { galleryLauncher.launch("image/*") },
+                        containerColor = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    ) {
+                        Icon(Icons.Default.PhotoLibrary, contentDescription = "Galería")
+                    }
                 }
 
-                // Botón para Capturar / Nueva Foto
+                // Botón para Recortar (Solo si hay imagen y no estamos ya recortando)
+                if (isPaused && capturedBitmap != null && !isCropping) {
+                    FloatingActionButton(
+                        onClick = { isCropping = true },
+                        containerColor = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    ) {
+                        Icon(Icons.Default.Crop, contentDescription = "Recortar")
+                    }
+                }
+
+                // Botón para Capturar / Confirmar Recorte / Nueva Foto
                 FloatingActionButton(
                     onClick = {
-                        if (!isPaused) {
+                        if (isCropping) {
+                            // La lógica de recorte se maneja dentro del componente CropOverlay
+                            // pero necesitamos una forma de disparar el "terminar" si no hay botón interno
+                        } else if (!isPaused) {
                             val bitmap = lastPreviewView?.bitmap
                             if (bitmap != null) {
                                 capturedBitmap = bitmap
@@ -257,6 +282,7 @@ fun MainScreen() {
                         } else {
                             capturedBitmap = null
                             isPaused = false
+                            isCropping = false
                             detectedText = ""
                             translatedText = ""
                         }
@@ -276,7 +302,7 @@ fun MainScreen() {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Parte de arriba: La cámara o la imagen capturada
+            // Parte de arriba: Cámara, Imagen o Recortador
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -288,71 +314,84 @@ fun MainScreen() {
                     )
                 }
 
-                // Si está pausado, mostramos la foto capturada o de galería
                 if (isPaused && capturedBitmap != null) {
-                    Image(
-                        bitmap = capturedBitmap!!.asImageBitmap(),
-                        contentDescription = "Imagen capturada",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
-                    )
+                    if (isCropping) {
+                        CropOverlay(
+                            bitmap = capturedBitmap!!,
+                            onCropDone = { cropped ->
+                                capturedBitmap = cropped
+                                isCropping = false
+                                processCapturedBitmap(cropped)
+                            },
+                            onCancel = { isCropping = false }
+                        )
+                    } else {
+                        Image(
+                            bitmap = capturedBitmap!!.asImageBitmap(),
+                            contentDescription = "Imagen capturada",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
                 }
             }
 
-            // Parte de abajo: Selección de idiomas y resultados
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    LanguageSelector(
-                        label = "De",
-                        selectedLanguage = sourceLanguage,
-                        onLanguageSelected = { sourceLanguage = it }
-                    )
-                    Text("→", fontSize = 24.sp)
-                    LanguageSelector(
-                        label = "A",
-                        selectedLanguage = targetLanguage,
-                        onLanguageSelected = { targetLanguage = it }
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Text("Texto Detectado:", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                Box(
+            // Parte de abajo: Selección de idiomas y resultados (Ocultar si estamos recortando para más espacio)
+            if (!isCropping) {
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(80.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
-                        .padding(8.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Text(text = detectedText)
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Text("Texto Traducido:", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
                         .weight(1f)
-                        .background(MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.shapes.small)
-                        .padding(8.dp)
-                        .verticalScroll(rememberScrollState())
+                        .fillMaxWidth()
+                        .padding(16.dp)
                 ) {
-                    if (!isTranslating && detectedText.isNotBlank()) {
-                        Text("Bajando modelos de traducción...", color = Color.Gray)
-                    } else {
-                        Text(text = translatedText)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        LanguageSelector(
+                            label = "De",
+                            selectedLanguage = sourceLanguage,
+                            onLanguageSelected = { sourceLanguage = it }
+                        )
+                        Text("→", fontSize = 24.sp)
+                        LanguageSelector(
+                            label = "A",
+                            selectedLanguage = targetLanguage,
+                            onLanguageSelected = { targetLanguage = it }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text("Texto Detectado:", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(80.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
+                            .padding(8.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text(text = detectedText)
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text("Texto Traducido:", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .background(MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.shapes.small)
+                            .padding(8.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        if (!isTranslating && detectedText.isNotBlank()) {
+                            Text("Bajando modelos de traducción...", color = Color.Gray)
+                        } else {
+                            Text(text = translatedText)
+                        }
                     }
                 }
             }
@@ -362,6 +401,153 @@ fun MainScreen() {
     if (showAboutDialog) {
         AboutDialog(onDismiss = { showAboutDialog = false })
     }
+}
+
+@Composable
+fun CropOverlay(
+    bitmap: Bitmap,
+    onCropDone: (Bitmap) -> Unit,
+    onCancel: () -> Unit
+) {
+    var containerSize by remember { mutableStateOf(IntSize.Zero) }
+    var rect by remember { mutableStateOf(Rect(100f, 100f, 500f, 500f)) }
+    
+    // Puntos de control (esquinas)
+    val handleSize = 40.dp
+    val handleSizePx = with(LocalDensity.current) { handleSize.toPx() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .onGloballyPositioned { containerSize = it.size }
+    ) {
+        // Mostrar la imagen de fondo
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Fit
+        )
+
+        // Overlay de recorte
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            // Dibujar el área sombreada fuera del recorte
+            // (Simplificado: solo dibujamos el rectángulo de recorte por ahora)
+            drawRect(
+                color = Color.White,
+                topLeft = rect.topLeft,
+                size = rect.size,
+                style = Stroke(width = 4f)
+            )
+            
+            // Dibujar las esquinas
+            drawCircle(Color.White, radius = handleSizePx / 4, center = rect.topLeft)
+            drawCircle(Color.White, radius = handleSizePx / 4, center = rect.topRight)
+            drawCircle(Color.White, radius = handleSizePx / 4, center = rect.bottomLeft)
+            drawCircle(Color.White, radius = handleSizePx / 4, center = rect.bottomRight)
+        }
+
+        // Detectores de gestos para las esquinas
+        // Superior Izquierda
+        Box(modifier = Modifier
+            .offset { IntOffset(rect.left.toInt() - (handleSizePx/2).toInt(), rect.top.toInt() - (handleSizePx/2).toInt()) }
+            .size(handleSize)
+            .pointerInput(Unit) {
+                detectDragGestures { change, dragAmount ->
+                    change.consume()
+                    rect = rect.copy(left = rect.left + dragAmount.x, top = rect.top + dragAmount.y)
+                }
+            }
+        )
+        // Superior Derecha
+        Box(modifier = Modifier
+            .offset { IntOffset(rect.right.toInt() - (handleSizePx/2).toInt(), rect.top.toInt() - (handleSizePx/2).toInt()) }
+            .size(handleSize)
+            .pointerInput(Unit) {
+                detectDragGestures { change, dragAmount ->
+                    change.consume()
+                    rect = rect.copy(right = rect.right + dragAmount.x, top = rect.top + dragAmount.y)
+                }
+            }
+        )
+        // Inferior Izquierda
+        Box(modifier = Modifier
+            .offset { IntOffset(rect.left.toInt() - (handleSizePx/2).toInt(), rect.bottom.toInt() - (handleSizePx/2).toInt()) }
+            .size(handleSize)
+            .pointerInput(Unit) {
+                detectDragGestures { change, dragAmount ->
+                    change.consume()
+                    rect = rect.copy(left = rect.left + dragAmount.x, bottom = rect.bottom + dragAmount.y)
+                }
+            }
+        )
+        // Inferior Derecha
+        Box(modifier = Modifier
+            .offset { IntOffset(rect.right.toInt() - (handleSizePx/2).toInt(), rect.bottom.toInt() - (handleSizePx/2).toInt()) }
+            .size(handleSize)
+            .pointerInput(Unit) {
+                detectDragGestures { change, dragAmount ->
+                    change.consume()
+                    rect = rect.copy(right = rect.right + dragAmount.x, bottom = rect.bottom + dragAmount.y)
+                }
+            }
+        )
+
+        // Botones de acción
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 32.dp)
+        ) {
+            Button(onClick = onCancel, colors = ButtonDefaults.buttonColors(containerColor = Color.Red)) {
+                Text("Cancelar")
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Button(onClick = {
+                // Calcular el recorte real basado en el bitmap
+                val cropped = cropBitmap(bitmap, rect, containerSize)
+                onCropDone(cropped)
+            }) {
+                Text("Aplicar Recorte")
+            }
+        }
+    }
+}
+
+private fun cropBitmap(bitmap: Bitmap, rect: Rect, containerSize: IntSize): Bitmap {
+    // 1. Encontrar cómo se escaló la imagen en el contenedor (ContentScale.Fit)
+    val containerWidth = containerSize.width.toFloat()
+    val containerHeight = containerSize.height.toFloat()
+    val bitmapWidth = bitmap.width.toFloat()
+    val bitmapHeight = bitmap.height.toFloat()
+
+    val scale = minOf(containerWidth / bitmapWidth, containerHeight / bitmapHeight)
+    val scaledWidth = bitmapWidth * scale
+    val scaledHeight = bitmapHeight * scale
+
+    val offsetX = (containerWidth - scaledWidth) / 2
+    val offsetY = (containerHeight - scaledHeight) / 2
+
+    // 2. Mapear el rect de la pantalla al rect del bitmap
+    val left = ((rect.left - offsetX) / scale).coerceIn(0f, bitmapWidth)
+    val top = ((rect.top - offsetY) / scale).coerceIn(0f, bitmapHeight)
+    val right = ((rect.right - offsetX) / scale).coerceIn(0f, bitmapWidth)
+    val bottom = ((rect.bottom - offsetY) / scale).coerceIn(0f, bitmapHeight)
+
+    val actualLeft = minOf(left, right)
+    val actualTop = minOf(top, bottom)
+    val actualRight = maxOf(left, right)
+    val actualBottom = maxOf(top, bottom)
+
+    val cropWidth = (actualRight - actualLeft).toInt().coerceAtLeast(1)
+    val cropHeight = (actualBottom - actualTop).toInt().coerceAtLeast(1)
+
+    // Evitar que el recorte se salga de los bordes finales por redondeo
+    val safeLeft = actualLeft.toInt().coerceIn(0, (bitmapWidth - cropWidth).toInt())
+    val safeTop = actualTop.toInt().coerceIn(0, (bitmapHeight - cropHeight).toInt())
+
+    return Bitmap.createBitmap(bitmap, safeLeft, safeTop, cropWidth, cropHeight)
 }
 
 @Composable
