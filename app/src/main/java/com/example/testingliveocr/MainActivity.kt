@@ -6,6 +6,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfDocument
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -22,7 +24,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.example.testingliveocr.databinding.ActivityMainBinding
 import com.google.mlkit.common.model.DownloadConditions
+import com.google.mlkit.common.model.RemoteModelManager
 import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.TranslateRemoteModel
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.Translator
 import com.google.mlkit.nl.translate.TranslatorOptions
@@ -80,7 +84,13 @@ class MainActivity : AppCompatActivity() {
         if (isGranted) {
             startCamera()
         } else {
-            Toast.makeText(this, "Permiso de cámara requerido para el OCR", Toast.LENGTH_LONG).show()
+            /* Si el usuario denegó el permiso, mostramos un mensaje */
+            if (!shouldShowRequestPermissionRationale(android.Manifest.permission.CAMERA)) {
+                /* Si marcó "No volver a preguntar", lo mandamos a ajustes */
+                showSettingsDialog()
+            } else {
+                Toast.makeText(this, "Permiso de cámara requerido para el OCR", Toast.LENGTH_LONG).show()
+            }
         }
     }
 
@@ -117,7 +127,8 @@ class MainActivity : AppCompatActivity() {
         if (allPermissionsGranted()) {
             startCamera()
         } else {
-            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            /* Pedimos el permiso de forma explícita */
+            cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
         }
         
         setupTranslator()
@@ -227,7 +238,7 @@ class MainActivity : AppCompatActivity() {
         binding.fabCrop.setImageResource(R.drawable.ic_crop)
         binding.fabCancelCrop.visibility = View.GONE
         binding.fabGallery.visibility = View.VISIBLE
-        binding.fabPdf.visibility = View.VISIBLE
+        binding.fabPdf.visibility = View.GONE
         binding.controlsContainer.visibility = View.VISIBLE
         binding.tvDetectedText.text = ""
         binding.tvTranslatedText.text = ""
@@ -269,13 +280,28 @@ class MainActivity : AppCompatActivity() {
         binding.fabCancelCrop.visibility = View.GONE
         binding.fabCapture.visibility = View.VISIBLE
         binding.fabGallery.visibility = View.VISIBLE
-        binding.fabPdf.visibility = View.VISIBLE
+        binding.fabPdf.visibility = if (translatedText.isNotBlank()) View.VISIBLE else View.GONE
         binding.controlsContainer.visibility = View.VISIBLE
     }
 
     /* Función rápida para ver si tenemos permiso de usar la cámara */
     private fun allPermissionsGranted() = ContextCompat.checkSelfPermission(
-        this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        this, android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+    /* Muestra un diálogo para mandar al usuario a los ajustes si denegó el permiso permanentemente */
+    private fun showSettingsDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Permiso de Cámara Requerido")
+            .setMessage("ByteLingo necesita acceso a la cámara para escanear texto. Parece que el permiso ha sido denegado permanentemente. Por favor, actívalo en los ajustes.")
+            .setPositiveButton("Ir a Ajustes") { _, _ ->
+                val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", packageName, null)
+                }
+                startActivity(intent)
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
 
     /* Aquí configuramos CameraX para que la cámara se vea en el PreviewView */
     private fun startCamera() {
@@ -294,7 +320,7 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    /* Configura el traductor de ML Kit y baja los modelos de idiomas si hace falta */
+    /* Configura el traductor de ML Kit y coordina la descarga de modelos */
     private fun setupTranslator() {
         translator?.close()
         val options = TranslatorOptions.Builder()
@@ -302,21 +328,84 @@ class MainActivity : AppCompatActivity() {
             .setTargetLanguage(targetLanguage.code)
             .build()
         translator = Translation.getClient(options)
-        
+
         isTranslating = false
-        binding.tvTranslatedText.text = "Bajando modelos de traducción..."
-        
-        val conditions = DownloadConditions.Builder().build()
-        translator?.downloadModelIfNeeded(conditions)
-            ?.addOnSuccessListener { 
-                isTranslating = true 
+
+        /* Primero checamos si ya tenemos los modelos instalados para no bajar nada */
+        checkModelsDownloaded(sourceLanguage.code, targetLanguage.code) { downloaded ->
+            if (downloaded) {
+                isTranslating = true
                 if (detectedText.isNotBlank()) translateText(detectedText)
                 else binding.tvTranslatedText.text = ""
+            } else {
+                /* Si faltan, verificamos el tipo de conexión */
+                when {
+                    isWifiConnected() -> performDownload(allowMobileData = false)
+                    isOnMobileData() -> showMobileDataWarning()
+                    else -> binding.tvTranslatedText.text = "Se requiere internet para los modelos"
+                }
             }
-            ?.addOnFailureListener { 
+        }
+    }
+
+    /* Verifica si los modelos de origen y destino ya están en el dispositivo */
+    private fun checkModelsDownloaded(source: String, target: String, callback: (Boolean) -> Unit) {
+        val modelManager = RemoteModelManager.getInstance()
+        val sourceModel = TranslateRemoteModel.Builder(source).build()
+        val targetModel = TranslateRemoteModel.Builder(target).build()
+
+        modelManager.isModelDownloaded(sourceModel).addOnSuccessListener { sDown ->
+            modelManager.isModelDownloaded(targetModel).addOnSuccessListener { tDown ->
+                callback(sDown && tDown)
+            }.addOnFailureListener { callback(false) }
+        }.addOnFailureListener { callback(false) }
+    }
+
+    /* Ejecuta la descarga real de los modelos necesarios */
+    private fun performDownload(allowMobileData: Boolean) {
+        binding.tvTranslatedText.text = "Bajando modelos de traducción..."
+        val conditions = DownloadConditions.Builder().apply {
+            if (!allowMobileData) {
+                requireWifi()
+            }
+        }.build()
+        
+        translator?.downloadModelIfNeeded(conditions)
+            ?.addOnSuccessListener {
+                isTranslating = true
+                if (detectedText.isNotBlank()) translateText(detectedText)
+                else binding.tvTranslatedText.text = "Modelos listos"
+            }
+            ?.addOnFailureListener {
                 Log.e("ByteLingo", "Error al bajar modelos", it)
                 binding.tvTranslatedText.text = "Error al bajar modelos"
             }
+    }
+
+    /* Muestra una alerta si el usuario va a gastar sus datos móviles */
+    private fun showMobileDataWarning() {
+        AlertDialog.Builder(this)
+            .setTitle("Descarga con datos móviles")
+            .setMessage("Los modelos de traducción no están descargados. ¿Deseas bajarlos usando datos móviles? (Aprox. 60MB)")
+            .setPositiveButton("Descargar") { _, _ -> performDownload(allowMobileData = true) }
+            .setNegativeButton("Cancelar") { dialog, _ ->
+                binding.tvTranslatedText.text = "Descarga pospuesta"
+                dialog.dismiss()
+            }
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun isWifiConnected(): Boolean {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val capabilities = cm.getNetworkCapabilities(cm.activeNetwork)
+        return capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+    }
+
+    private fun isOnMobileData(): Boolean {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val capabilities = cm.getNetworkCapabilities(cm.activeNetwork)
+        return capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
     }
 
     /* Le pasa la imagen a ML Kit para que "lea" el texto que tiene */
@@ -340,10 +429,15 @@ class MainActivity : AppCompatActivity() {
                 ?.addOnSuccessListener { 
                     translatedText = it
                     binding.tvTranslatedText.text = it
+                    binding.fabPdf.visibility = View.VISIBLE
                 }
-                ?.addOnFailureListener { Log.e("ByteLingo", "Falló la traducción", it) }
+                ?.addOnFailureListener { 
+                    Log.e("ByteLingo", "Falló la traducción", it)
+                    binding.fabPdf.visibility = View.GONE
+                }
         } else if (text.isBlank()) {
             binding.tvTranslatedText.text = ""
+            binding.fabPdf.visibility = View.GONE
         }
     }
 
@@ -444,7 +538,7 @@ class MainActivity : AppCompatActivity() {
     private fun showAboutDialog() {
         AlertDialog.Builder(this)
             .setTitle("Acerca de ByteLingo")
-            .setMessage("ByteLingo es una app para traducir texto en vivo usando OCR.\n\nDesarrolladores:\n• Jose Meraz\n• Carlos Lopez\n• Gilberto Valladares\n• Joseph Rodriguez\n• Santiago Chavarria\n• Eduardo Contreras\n• Luis Ayestas")
+            .setMessage("ByteLingo es una app para traducir texto usando OCR.\n\nDesarrolladores:\n• Jose Meraz\n• Carlos Lopez\n• Gilberto Valladares\n• Joseph Rodriguez\n• Santiago Chavarria\n• Eduardo Contreras\n• Luis Ayestas")
             .setPositiveButton("Cerrar", null)
             .show()
     }
